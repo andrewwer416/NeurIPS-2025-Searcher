@@ -76,7 +76,6 @@ def load_or_build_embeddings() -> Tuple[np.ndarray, List[dict]]:
         else:
             print("[warn] Embedding count mismatch; recomputing.", file=sys.stderr)
 
-    # Compute embeddings
     print(f"[info] Computing embeddings with {MODEL_NAME}", file=sys.stderr)
     model = SentenceTransformer(MODEL_NAME)
     texts = build_texts(papers)
@@ -97,7 +96,6 @@ def load_or_build_embeddings() -> Tuple[np.ndarray, List[dict]]:
 # ------------------------
 
 def parse_keywords(query: str) -> List[str]:
-    """Split query into keyword tokens."""
     if "," in query:
         parts = [p.strip() for p in query.split(",")]
     else:
@@ -123,7 +121,6 @@ def keyword_search(
     scores: List[float] = []
 
     for i, p in enumerate(papers):
-        # Time filter: if user selected specific time slots, skip others
         if allowed_times and p.get("time") not in allowed_times:
             continue
 
@@ -140,14 +137,12 @@ def keyword_search(
         hits_indices.append(i)
         scores.append(score)
 
-
     if not hits_indices:
         return []
 
     idx_arr = np.array(hits_indices, dtype=int)
     score_arr = np.array(scores, dtype=float)
 
-    # Sort by score desc, then by title to get deterministic ordering
     titles = np.array([papers[i]["title"] for i in idx_arr], dtype=object)
     order = np.lexsort((titles, -score_arr))
     idx_arr = idx_arr[order]
@@ -179,17 +174,15 @@ def semantic_search(
         return []
 
     q_vec = model.encode([query], convert_to_numpy=True)[0:1, :]
-    q_vec = normalize_embeddings(q_vec)[0]  # shape (d,)
+    q_vec = normalize_embeddings(q_vec)[0]
 
-    sims = embeddings @ q_vec  # (N,)
-    # We will enforce top_k after filtering by time
+    sims = embeddings @ q_vec
     idx_unsorted = np.argsort(-sims)  # all docs sorted by similarity desc
 
     results: List[dict] = []
     for i in idx_unsorted:
         p = papers[int(i)]
 
-        # Time filter
         if allowed_times and p.get("time") not in allowed_times:
             continue
 
@@ -205,7 +198,6 @@ def semantic_search(
     return results
 
 
-
 # ------------------------
 # Flask routes
 # ------------------------
@@ -213,7 +205,7 @@ def semantic_search(
 @app.route("/", methods=["GET", "POST"])
 def index():
     query = ""
-    mode = "semantic"  # default
+    mode = "semantic"
     top_k = 20
     match_all = False
     results: List[dict] = []
@@ -224,7 +216,6 @@ def index():
         mode = request.form.get("mode", "semantic")
         top_k_str = request.form.get("top_k", "20")
         match_all = request.form.get("match_all") == "on"
-        # Multiple checkboxes (all with name="time_filter")
         selected_times = request.form.getlist("time_filter")
 
         try:
@@ -232,13 +223,15 @@ def index():
         except ValueError:
             top_k = 20
 
+        allowed_times = selected_times or None
+
         if mode == "keyword":
             results = keyword_search(
                 PAPERS,
                 query,
                 top_k=top_k,
                 match_all=match_all,
-                allowed_times=selected_times or None,
+                allowed_times=allowed_times,
             )
         else:
             if MODEL is None or EMBEDDINGS is None:
@@ -250,7 +243,7 @@ def index():
                     MODEL,
                     query,
                     top_k=top_k,
-                    allowed_times=selected_times or None,
+                    allowed_times=allowed_times,
                 )
 
     return render_template(
@@ -266,7 +259,6 @@ def index():
     )
 
 
-
 # ------------------------
 # App startup
 # ------------------------
@@ -275,15 +267,12 @@ def init_app():
     global PAPERS, EMBEDDINGS, MODEL, TIME_SLOTS
     EMBEDDINGS, PAPERS = load_or_build_embeddings()
     MODEL = SentenceTransformer(MODEL_NAME)
-    # Unique non-empty time strings, sorted
-    TIME_SLOTS = sorted(
-        {p.get("time") for p in PAPERS if p.get("time")}
-    )
+    TIME_SLOTS = sorted({p.get("time") for p in PAPERS if p.get("time")})
     print("[info] App initialized", file=sys.stderr)
-
 
 
 if __name__ == "__main__":
     init_app()
-    # 0.0.0.0 so you can reach it from other machines on your LAN
-    app.run(host="0.0.0.0", port=5000, debug=False)
+    port = int(os.environ.get("PORT", 5000))
+    # Railway sets PORT env var; we bind to it
+    app.run(host="0.0.0.0", port=port)
